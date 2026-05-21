@@ -214,12 +214,16 @@ class MFGMetaTrainer(object):
         """
         return self._output_policy
 
+    def get_inner_loop_stats(self):
+        if hasattr(self._meta_strategy_method, "get_last_run_stats"):
+            return self._meta_strategy_method.get_last_run_stats()
+        return {}
+
     def get_policies(self):
         return self._policies
 
     def get_distrbutions(self):
         return self._distributions
-
 
 
 

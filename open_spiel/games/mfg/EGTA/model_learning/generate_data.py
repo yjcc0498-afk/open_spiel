@@ -54,6 +54,11 @@ flags.DEFINE_bool("finer_encode", False, "Enables finer encoding.")
 # 新增：显式控制 utility 数据用哪种策略表示。
 # one_hot 保留旧版基线；transformer_stats 生成新方案需要的时序特征数据。
 flags.DEFINE_string("encoding", "one_hot", "Utility encoding: 'one_hot' or 'transformer_stats'.")
+flags.DEFINE_enum("sampling_mode", "hybrid", ["grid", "dirichlet", "hybrid"],
+                  "Mixed-strategy sampling scheme for paper reproduction.")
+flags.DEFINE_integer("grid_density", 4, "Simplex grid density for grid samples.")
+flags.DEFINE_integer("grid_sample_count", 0, "Grid samples to keep. 0 splits num_samples automatically.")
+flags.DEFINE_integer("dirichlet_sample_count", 0, "Dirichlet samples to draw. 0 splits num_samples automatically.")
 
 # Game configuration
 flags.DEFINE_integer("game_size", 10,
@@ -91,6 +96,8 @@ def egta_looper(game, writer, checkpoint_dir):
 
 
     ## Game Model Learning ###
+    grid_sample_count = FLAGS.grid_sample_count if FLAGS.grid_sample_count > 0 else None
+    dirichlet_sample_count = FLAGS.dirichlet_sample_count if FLAGS.dirichlet_sample_count > 0 else None
     if FLAGS.finer_encode:
         print("Starting generating finer data.")
         finer_sampler = Finer_Utility_Sampler(mfg_game=game,
@@ -100,7 +107,7 @@ def egta_looper(game, writer, checkpoint_dir):
                                          horizon=FLAGS.game_horizon,
                                          checkpoint_dir=checkpoint_dir,
                                          grid=FLAGS.grid,
-                                         grid_density=4)
+                                         grid_density=FLAGS.grid_density)
 
         finer_sampler.compute_utility()
     else:
@@ -110,8 +117,11 @@ def egta_looper(game, writer, checkpoint_dir):
                                          num_samples=FLAGS.num_samples,
                                          checkpoint_dir=checkpoint_dir,
                                          grid=FLAGS.grid,
-                                         grid_density=4,
-                                         encoding=FLAGS.encoding)
+                                         grid_density=FLAGS.grid_density,
+                                         encoding=FLAGS.encoding,
+                                         sampling_mode=FLAGS.sampling_mode,
+                                         grid_sample_count=grid_sample_count,
+                                         dirichlet_sample_count=dirichlet_sample_count)
 
         coarse_sampler.compute_utility()
 
@@ -130,7 +140,7 @@ def main(argv):
     checkpoint_dir = FLAGS.game_name
     if not os.path.exists(FLAGS.root_result_folder):
         os.makedirs(FLAGS.root_result_folder)
-    checkpoint_dir += '_it_' + str(FLAGS.egta_iterations) + '_grid_' + str(FLAGS.grid) + '_sample_' + str(FLAGS.num_samples) + '_gendata_' + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    checkpoint_dir += '_it_' + str(FLAGS.egta_iterations) + '_sampling_' + FLAGS.sampling_mode + '_sample_' + str(FLAGS.num_samples) + '_gendata_' + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     checkpoint_dir = os.path.join(os.getcwd(), FLAGS.root_result_folder, checkpoint_dir)
 
     writer = SummaryWriter(logdir=checkpoint_dir + '/log')

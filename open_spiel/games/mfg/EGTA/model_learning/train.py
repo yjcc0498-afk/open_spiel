@@ -10,14 +10,29 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 
 try:
-    from .transformer_game_model import PaperMLPGameModel, TransformerStatsGameModel
+    from .transformer_game_model import (
+        PaperMLPGameModel,
+        TransformerGameModel,
+        TransformerStatsGameModel,
+    )
 except ImportError:
-    from transformer_game_model import PaperMLPGameModel, TransformerStatsGameModel
+    from transformer_game_model import (
+        PaperMLPGameModel,
+        TransformerGameModel,
+        TransformerStatsGameModel,
+    )
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 EGTA_DIR = os.path.dirname(SCRIPT_DIR)
 EPS = 1e-8
+
+
+def set_random_seeds(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 class OneHotMFGDataset(Dataset):
@@ -87,7 +102,7 @@ def random_train_val_split(*arrays, test_size=0.2, random_state=42):
 
 def split_train_val(arrays, args, policy_indices=None):
     if args.split_mode == "random":
-        return random_train_val_split(*arrays, test_size=args.val_split, random_state=42), None
+        return random_train_val_split(*arrays, test_size=args.val_split, random_state=args.seed), None
 
     if policy_indices is None:
         raise ValueError("strategy_holdout split requires policy indices.")
@@ -98,7 +113,7 @@ def split_train_val(arrays, args, policy_indices=None):
         raise ValueError("Need at least two policies for strategy_holdout split.")
 
     holdout_count = min(max(args.holdout_strategy_count, 1), len(unique_policies) - 1)
-    rng = np.random.RandomState(42)
+    rng = np.random.RandomState(args.seed)
     holdout_policies = np.sort(rng.choice(unique_policies, size=holdout_count, replace=False))
     val_mask = np.isin(policy_indices, holdout_policies)
     train_mask = ~val_mask
@@ -147,13 +162,19 @@ def _denormalize(tensor, y_mean, y_std):
 
 
 def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, y_mean=0.0,
-                y_std=1.0, patience=30, verbose=False):
+                y_std=1.0, patience=0, verbose=False, max_steps=None,
+                optimizer_name="adam", weight_decay=0.0):
     """Train on normalized targets while reporting metrics on the raw utility scale."""
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    if optimizer_name == "adamw":
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    elif optimizer_name == "adam":
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    else:
+        raise ValueError("Unsupported optimizer: {}".format(optimizer_name))
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=max(5, patience // 3)
     )
@@ -168,6 +189,7 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, y_mean=0.
     best_val_r2 = -float("inf")
     best_val_loss = float("inf")
     epochs_without_improvement = 0
+    global_step = 0
 
     for epoch in range(epochs):
         model.train()
@@ -186,10 +208,14 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, y_mean=0.
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+            global_step += 1
 
             train_objective_loss += loss.item()
             train_predictions.append(_denormalize(output.detach().cpu(), y_mean, y_std))
             train_targets.append(_denormalize(utility.detach().cpu(), y_mean, y_std))
+
+            if max_steps is not None and global_step >= max_steps:
+                break
 
         train_predictions = torch.cat(train_predictions) if train_predictions else torch.empty(0, 1)
         train_targets = torch.cat(train_targets) if train_targets else torch.empty(0, 1)
@@ -245,6 +271,8 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, y_mean=0.
             if verbose:
                 print("Early stopping at epoch {}. Best epoch: {}".format(epoch + 1, best_epoch))
             break
+        if max_steps is not None and global_step >= max_steps:
+            break
 
     if verbose:
         print("\nFinal Metrics")
@@ -255,7 +283,7 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, y_mean=0.
         print("Best Val MSE: {:.6f}".format(best_val_loss))
         print("Best Val R2: {:.6f} at epoch {}".format(best_val_r2, best_epoch))
 
-    return train_losses, val_losses, train_r2_scores, val_r2_scores, best_state, best_epoch, best_val_loss, best_val_r2
+    return train_losses, val_losses, train_r2_scores, val_r2_scores, best_state, best_epoch, best_val_loss, best_val_r2, global_step
 
 
 def _default_data_dir():
@@ -317,6 +345,12 @@ def build_dataloaders(args):
     data_dir = os.path.abspath(args.data_dir) if args.data_dir else _default_data_dir()
     print("Data dir:", data_dir)
     print("Encoding:", args.encoding)
+    print("Model type:", args.model_type)
+
+    if args.model_type == "transformer_stats" and args.encoding != "transformer_stats":
+        raise ValueError("model_type=transformer_stats requires --encoding=transformer_stats.")
+    if args.encoding == "transformer_stats" and args.model_type != "transformer_stats":
+        raise ValueError("--encoding=transformer_stats requires --model_type=transformer_stats.")
 
     scalers = {}
     if args.encoding == "one_hot":
@@ -330,12 +364,26 @@ def build_dataloaders(args):
 
         train_dataset = OneHotMFGDataset(train_strategies, train_mixtures, train_utilities)
         val_dataset = OneHotMFGDataset(val_strategies, val_mixtures, val_utilities)
-        model = PaperMLPGameModel(
-            num_strategies=num_strategies,
-            hidden_dim=args.dim_feedforward,
-            dropout=args.dropout,
-        )
+        if args.model_type == "mlp":
+            model = PaperMLPGameModel(
+                num_strategies=num_strategies,
+                hidden_dim=args.dim_feedforward,
+                dropout=args.dropout,
+            )
+        elif args.model_type == "transformer":
+            model = TransformerGameModel(
+                num_strategies=num_strategies,
+                d_model=args.d_model,
+                nhead=args.nhead,
+                num_layers=args.num_layers,
+                dim_feedforward=args.dim_feedforward,
+                dropout=args.dropout,
+            )
+        else:
+            raise ValueError("Unsupported one_hot model_type: {}".format(args.model_type))
         metadata = {
+            "model_type": args.model_type,
+            "encoding": args.encoding,
             "num_strategies": num_strategies,
             "train_size": len(train_dataset),
             "val_size": len(val_dataset),
@@ -373,6 +421,8 @@ def build_dataloaders(args):
         scalers["feature_mean"] = feature_mean.astype(np.float32)
         scalers["feature_std"] = feature_std.astype(np.float32)
         metadata = {
+            "model_type": args.model_type,
+            "encoding": args.encoding,
             "feature_shape": train_features.shape[1:],
             "mixture_dim": train_mixtures.shape[1],
             "train_size": len(train_dataset),
@@ -442,22 +492,34 @@ def main():
     parser.add_argument("--data_dir", type=str, default=None, help="Directory containing generated utility data.")
     parser.add_argument("--encoding", type=str, default="one_hot", choices=["one_hot", "transformer_stats"],
                         help="Select whether to train on CSV one-hot inputs or transformer_stats .npy inputs.")
+    parser.add_argument("--model_type", type=str, default="mlp",
+                        choices=["mlp", "transformer", "transformer_stats"],
+                        help="Regressor architecture. Use transformer with one_hot to keep the paper coarse coding fixed.")
     parser.add_argument("--batch_size", type=int, default=32, help="Mini-batch size.")
-    parser.add_argument("--epochs", type=int, default=100, help="Training epochs.")
+    parser.add_argument("--epochs", type=int, default=100, help="Training epochs. Ignored when --training_steps > 0.")
+    parser.add_argument("--training_steps", type=int, default=1000,
+                        help="Optimizer steps to match the paper setting. Use 0 to keep --epochs.")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate.")
-    parser.add_argument("--val_split", type=float, default=0.2, help="Validation split ratio.")
+    parser.add_argument("--val_split", type=float, default=0.3, help="Validation split ratio.")
     parser.add_argument("--d_model", type=int, default=128, help="Transformer hidden size.")
     parser.add_argument("--nhead", type=int, default=4, help="Number of attention heads.")
     parser.add_argument("--num_layers", type=int, default=2, help="Number of Transformer encoder layers.")
     parser.add_argument("--dim_feedforward", type=int, default=256, help="Feed-forward hidden size.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout.")
-    parser.add_argument("--patience", type=int, default=30, help="Early-stopping patience. Use 0 to disable.")
+    parser.add_argument("--patience", type=int, default=0, help="Early-stopping patience. Use 0 to disable.")
+    parser.add_argument("--optimizer", type=str, default="adam", choices=["adam", "adamw"],
+                        help="Optimizer. adam matches the paper setting.")
+    parser.add_argument("--weight_decay", type=float, default=0.0,
+                        help="Weight decay. Keep 0.0 for the paper-controlled comparison.")
     parser.add_argument("--split_mode", type=str, default="random", choices=["random", "strategy_holdout"],
                         help="random matches the paper-style row split; strategy_holdout tests unseen pure policies.")
     parser.add_argument("--holdout_strategy_count", type=int, default=3,
                         help="Number of pure policies held out when split_mode=strategy_holdout.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for split and model initialization.")
     parser.add_argument("--verbose", action="store_true", help="Print periodic training metrics.")
     args = parser.parse_args()
+
+    set_random_seeds(args.seed)
 
     data_dir, model, train_loader, val_loader, metadata, scalers = build_dataloaders(args)
     print("Train size:", metadata["train_size"])
@@ -466,21 +528,35 @@ def main():
         if key not in ("train_size", "val_size"):
             print("{}: {}".format(key, value))
 
-    train_losses, val_losses, train_r2_scores, val_r2_scores, best_state, best_epoch, best_val_loss, best_val_r2 = train_model(
+    effective_epochs = args.epochs
+    if args.training_steps > 0:
+        steps_per_epoch = max(len(train_loader), 1)
+        effective_epochs = int(np.ceil(float(args.training_steps) / float(steps_per_epoch)))
+        print("Training steps target:", args.training_steps)
+        print("Steps per epoch:", steps_per_epoch)
+        print("Effective epochs:", effective_epochs)
+
+    max_steps = args.training_steps if args.training_steps > 0 else None
+    train_losses, val_losses, train_r2_scores, val_r2_scores, best_state, best_epoch, best_val_loss, best_val_r2, actual_steps = train_model(
         model,
         train_loader,
         val_loader,
-        epochs=args.epochs,
+        epochs=effective_epochs,
         lr=args.lr,
         y_mean=metadata["y_mean"],
         y_std=metadata["y_std"],
         patience=args.patience,
         verbose=args.verbose,
+        max_steps=max_steps,
+        optimizer_name=args.optimizer,
+        weight_decay=args.weight_decay,
     )
+    print("Actual optimizer steps:", actual_steps)
 
     models_dir = os.path.join(SCRIPT_DIR, "models")
     os.makedirs(models_dir, exist_ok=True)
-    model_prefix = "trained_model_{}_size{}_step{}".format(args.encoding, args.size, args.step)
+    model_prefix = "trained_model_{}_{}_size{}_step{}".format(
+        args.encoding, args.model_type, args.size, args.step)
     model_path = os.path.join(models_dir, model_prefix + ".pth")
     best_model_path = os.path.join(models_dir, model_prefix + "_best.pth")
     torch.save(model.state_dict(), model_path)
@@ -499,8 +575,15 @@ def main():
     with open(summary_path, "w", encoding="utf-8") as summary_file:
         summary_file.write("data_dir={}\n".format(data_dir))
         summary_file.write("encoding={}\n".format(args.encoding))
+        summary_file.write("model_type={}\n".format(args.model_type))
         summary_file.write("train_size={}\n".format(metadata["train_size"]))
         summary_file.write("val_size={}\n".format(metadata["val_size"]))
+        summary_file.write("training_steps={}\n".format(args.training_steps))
+        summary_file.write("actual_optimizer_steps={}\n".format(actual_steps))
+        summary_file.write("effective_epochs={}\n".format(effective_epochs))
+        summary_file.write("optimizer={}\n".format(args.optimizer))
+        summary_file.write("weight_decay={:.8f}\n".format(args.weight_decay))
+        summary_file.write("patience={}\n".format(args.patience))
         summary_file.write("final_train_loss={:.6f}\n".format(train_losses[-1]))
         summary_file.write("final_val_loss={:.6f}\n".format(val_losses[-1]))
         summary_file.write("final_train_r2={:.6f}\n".format(train_r2_scores[-1]))
@@ -513,6 +596,7 @@ def main():
         summary_file.write("uses_policy_feature_bank={}\n".format(metadata["uses_policy_feature_bank"]))
         summary_file.write("split_mode={}\n".format(metadata["split_mode"]))
         summary_file.write("holdout_policies={}\n".format(metadata["holdout_policies"]))
+        summary_file.write("seed={}\n".format(args.seed))
     print("Saved summary to:", summary_path)
 
 

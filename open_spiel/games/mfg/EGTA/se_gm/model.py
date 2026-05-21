@@ -56,6 +56,8 @@ class TF_Regressor(object):
         return self._num_policies
 
     def _build_model(self):
+        if self._encoding == 'one_hot_transformer':
+            return self._build_coarse_transformer_model()
         if self._encoding == 'transformer_stats':
             return self._build_transformer_model()
         return self._build_mlp_model()
@@ -66,6 +68,56 @@ class TF_Regressor(object):
         for idx, size in enumerate(self._output_sizes[:-1]):
             model.add(layers.Dense(size, activation="relu", name="layer" + str(idx + 1)))
         model.add(layers.Dense(self._output_sizes[-1], name="output"))
+        model.compile(
+            loss='mse',
+            optimizer=keras.optimizers.Adam(learning_rate=self._learning_rate))
+        return model
+
+    def _build_coarse_transformer_model(self):
+        # Same paper coarse coding input as the MLP baseline:
+        # [one_hot(strategy), mixed_weights]. Only the regressor is changed.
+        if self._num_policies is None:
+            raise ValueError("one_hot_transformer mode requires num_policies.")
+
+        flat_input = keras.Input(shape=(self._num_policies * 2,), name="coarse_input")
+        strategy_input = layers.Lambda(
+            lambda x: x[:, :self._num_policies],
+            name="strategy_one_hot")(flat_input)
+        mixed_input = layers.Lambda(
+            lambda x: x[:, self._num_policies:],
+            name="mixed_weights")(flat_input)
+
+        strategy_token = layers.Dense(self._d_model, name="strategy_projection")(strategy_input)
+        mixed_token = layers.Dense(self._d_model, name="mixture_projection")(mixed_input)
+        strategy_token = layers.Reshape((1, self._d_model), name="strategy_token")(strategy_token)
+        mixed_token = layers.Reshape((1, self._d_model), name="mixed_token")(mixed_token)
+        tokens = layers.Concatenate(axis=1, name="coarse_tokens")([strategy_token, mixed_token])
+
+        positions = np.arange(2)
+        position_embedding = layers.Embedding(
+            input_dim=2,
+            output_dim=self._d_model,
+            name="position_embedding")(positions)
+        x = tokens + position_embedding
+
+        for idx in range(self._num_layers):
+            attn_output = layers.MultiHeadAttention(
+                num_heads=self._nhead,
+                key_dim=max(self._d_model // self._nhead, 1),
+                name="mha_{}".format(idx))(x, x)
+            x = layers.LayerNormalization(epsilon=1e-6, name="attn_ln_{}".format(idx))(x + attn_output)
+
+            ff = layers.Dense(self._d_model * 2, activation="relu", name="ff_{}_1".format(idx))(x)
+            ff = layers.Dense(self._d_model, name="ff_{}_2".format(idx))(ff)
+            x = layers.LayerNormalization(epsilon=1e-6, name="ff_ln_{}".format(idx))(x + ff)
+
+        pooled = layers.GlobalAveragePooling1D(name="sequence_pooling")(x)
+        hidden = pooled
+        for idx, size in enumerate(self._output_sizes[:-1]):
+            hidden = layers.Dense(size, activation="relu", name="mlp_{}".format(idx + 1))(hidden)
+        output = layers.Dense(self._output_sizes[-1], name="output")(hidden)
+
+        model = keras.Model(inputs=flat_input, outputs=output, name="coarse_transformer_utility_model")
         model.compile(
             loss='mse',
             optimizer=keras.optimizers.Adam(learning_rate=self._learning_rate))
@@ -235,10 +287,12 @@ class TF_Regressor(object):
     def _prepare_dataset_inputs(self, X):
         if self._encoding == 'transformer_stats':
             return {
-                "strategy_features": np.asarray(X["strategy_features"], dtype=np.float32),
-                "mixed_weights": np.asarray(X["mixed_weights"], dtype=np.float32),
+                "strategy_features": self._squeeze_singleton_batch(
+                    np.asarray(X["strategy_features"], dtype=np.float32)),
+                "mixed_weights": self._squeeze_singleton_batch(
+                    np.asarray(X["mixed_weights"], dtype=np.float32)),
             }
-        return np.asarray(X, dtype=np.float32)
+        return self._squeeze_singleton_batch(np.asarray(X, dtype=np.float32))
 
     def _to_storage(self, X):
         # Transformer 模式下，数据不再是单个扁平向量，而是双输入：
@@ -247,18 +301,26 @@ class TF_Regressor(object):
         if self._encoding == 'transformer_stats':
             if isinstance(X, dict):
                 return {
-                    "strategy_features": np.asarray(X["strategy_features"], dtype=np.float32),
-                    "mixed_weights": np.asarray(X["mixed_weights"], dtype=np.float32),
+                    "strategy_features": self._squeeze_singleton_batch(
+                        np.asarray(X["strategy_features"], dtype=np.float32)),
+                    "mixed_weights": self._squeeze_singleton_batch(
+                        np.asarray(X["mixed_weights"], dtype=np.float32)),
                 }
             if isinstance(X, list):
                 return {
-                    "strategy_features": np.asarray(
-                        [sample["strategy_features"] for sample in X], dtype=np.float32),
-                    "mixed_weights": np.asarray(
-                        [sample["mixed_weights"] for sample in X], dtype=np.float32),
+                    "strategy_features": self._squeeze_singleton_batch(
+                        np.asarray([sample["strategy_features"] for sample in X], dtype=np.float32)),
+                    "mixed_weights": self._squeeze_singleton_batch(
+                        np.asarray([sample["mixed_weights"] for sample in X], dtype=np.float32)),
                 }
             raise ValueError("Transformer mode expects dict inputs.")
-        return np.asarray(X, dtype=np.float32)
+        return self._squeeze_singleton_batch(np.asarray(X, dtype=np.float32))
+
+    def _squeeze_singleton_batch(self, array):
+        array = np.asarray(array, dtype=np.float32)
+        while array.ndim >= 3 and array.shape[1] == 1:
+            array = np.squeeze(array, axis=1)
+        return array
 
     def _copy_inputs(self, X):
         if self._encoding == 'transformer_stats':

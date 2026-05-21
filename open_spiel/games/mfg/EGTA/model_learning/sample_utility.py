@@ -22,6 +22,96 @@ from open_spiel.python.mfg.algorithms import policy_value
 
 import numpy as np
 
+
+_DIRICHLET_TRAIN_PARAMS = np.arange(0.05, 1.05, 0.05)
+_DIRICHLET_TEST_PARAMS = np.arange(0.05, 2.05, 0.05)
+
+
+def _normalize_mixture_weights(weights):
+    normalized = np.asarray(weights, dtype=np.float64).copy()
+    normalized = np.clip(normalized, 0.0, None)
+    total = float(np.sum(normalized, dtype=np.float64))
+    if total <= 0.0:
+        raise ValueError("Mixed strategy weights must have positive sum.")
+    normalized /= total
+    if len(normalized) > 1:
+        normalized[-1] = max(0.0, 1.0 - float(np.sum(normalized[:-1], dtype=np.float64)))
+    normalized /= float(np.sum(normalized, dtype=np.float64))
+    return normalized
+
+
+def _normalize_mixture_matrix(samples, num_policies):
+    samples = np.asarray(samples, dtype=np.float64)
+    if samples.size == 0:
+        return np.empty((0, num_policies), dtype=np.float64)
+    return np.asarray([_normalize_mixture_weights(row) for row in samples], dtype=np.float64)
+
+
+def _sample_grid_mixtures(num_policies, grid_density, target_count=None):
+    full_grid = np.asarray(simplex_grid(m=num_policies, n=grid_density) / grid_density, dtype=np.float64)
+    if target_count is None or target_count <= 0 or len(full_grid) <= target_count:
+        return _normalize_mixture_matrix(full_grid, num_policies)
+    rng = np.random.RandomState(0)
+    selected = np.sort(rng.choice(len(full_grid), size=target_count, replace=False))
+    return _normalize_mixture_matrix(full_grid[selected], num_policies)
+
+
+def _sample_dirichlet_mixtures(num_policies, num_samples, test=False):
+    if num_samples <= 0:
+        return np.empty((0, num_policies), dtype=np.float64)
+    params = _DIRICHLET_TEST_PARAMS if test else _DIRICHLET_TRAIN_PARAMS
+    samples = []
+    base_count = num_samples // len(params)
+    remainder = num_samples % len(params)
+    for idx, param in enumerate(params):
+        count = base_count + (1 if idx < remainder else 0)
+        if count <= 0:
+            continue
+        samples.extend(
+            dirichlet_sampling_simplex(
+                dim=num_policies,
+                num_of_points=count,
+                alpha_coef=param))
+    return _normalize_mixture_matrix(samples, num_policies)
+
+
+def _build_sampled_mixtures(num_policies,
+                            num_samples,
+                            grid,
+                            grid_density,
+                            test=False,
+                            sampling_mode=None,
+                            grid_sample_count=None,
+                            dirichlet_sample_count=None):
+    mode = sampling_mode or ("grid" if grid else "dirichlet")
+    if mode == "grid":
+        return _sample_grid_mixtures(num_policies, grid_density, grid_sample_count)
+    if mode == "dirichlet":
+        count = dirichlet_sample_count if dirichlet_sample_count is not None else num_samples
+        return _sample_dirichlet_mixtures(num_policies, count, test=test)
+    if mode == "hybrid":
+        auto_grid_count = grid_sample_count is None
+        auto_dirichlet_count = dirichlet_sample_count is None
+        if grid_sample_count is None and dirichlet_sample_count is None:
+            grid_sample_count = int(np.ceil(num_samples / 2.0))
+        elif grid_sample_count is None:
+            grid_sample_count = max(num_samples - dirichlet_sample_count, 0)
+        elif dirichlet_sample_count is None:
+            dirichlet_sample_count = max(num_samples - grid_sample_count, 0)
+        grid_samples = _sample_grid_mixtures(num_policies, grid_density, grid_sample_count)
+        if auto_dirichlet_count:
+            dirichlet_sample_count = max(num_samples - len(grid_samples), 0)
+        if auto_grid_count and not auto_dirichlet_count:
+            grid_sample_count = max(num_samples - dirichlet_sample_count, 0)
+            grid_samples = _sample_grid_mixtures(num_policies, grid_density, grid_sample_count)
+        dirichlet_samples = _sample_dirichlet_mixtures(num_policies, dirichlet_sample_count, test=test)
+        parts = [part for part in (grid_samples, dirichlet_samples) if len(part) > 0]
+        if not parts:
+            return np.empty((0, num_policies), dtype=np.float64)
+        return _normalize_mixture_matrix(np.concatenate(parts, axis=0), num_policies)
+    raise ValueError("Unsupported sampling_mode: {}".format(mode))
+
+
 class Coarse_Utility_Sampler():
     def __init__(self,
                  mfg_game,
@@ -31,7 +121,10 @@ class Coarse_Utility_Sampler():
                  grid=False,
                  grid_density=4,
                  test=False,
-                 encoding="one_hot"):
+                 encoding="one_hot",
+                 sampling_mode=None,
+                 grid_sample_count=None,
+                 dirichlet_sample_count=None):
         """
         Sample utility function u(s, mu).
         :param mfg_game: mean field game.
@@ -59,29 +152,19 @@ class Coarse_Utility_Sampler():
                 mfg_game, sequence_length=mfg_game.max_game_length())
             self._policy_features = self._feature_extractor.batch_extract(self._policies)
 
-        # Approximately and uniformly sample a collection of mixed strategies.
-        if grid:
-            self._sampled_mixed_policies = simplex_grid(m=self._num_policies, n=grid_density) / grid_density
-        elif test:
-            # Hard coded range of sampled test coefficients.
-            params = np.arange(0.05, 2.05, 0.05)
-            samples = []
-            num_samples_per_param = int(num_samples / len(params))
-            for param in params:
-                samples += list(dirichlet_sampling_simplex(dim=self._num_policies, num_of_points=num_samples_per_param,
-                                                           alpha_coef=param))
-            self._sampled_mixed_policies = np.array(samples)
-        else:
-            # Hard coded range of sampled coefficients.
-            # params = np.arange(0.05, 2.05, 0.05)
-            params = np.arange(0.05, 1.05, 0.05)
-            # params = np.arange(0.01, 2.01, 0.1)
-            print("Dirichlet params:", params)
-            samples = []
-            num_samples_per_param = int(num_samples / len(params))
-            for param in params:
-                samples += list(dirichlet_sampling_simplex(dim=self._num_policies, num_of_points=num_samples_per_param, alpha_coef=param))
-            self._sampled_mixed_policies = np.array(samples)
+        # Paper-compatible coarse coding data can use grid, Dirichlet, or a
+        # hybrid of both. The same utility_X/Y files are used by MLP and
+        # Transformer so architecture is the only controlled variable.
+        self._sampled_mixed_policies = _build_sampled_mixtures(
+            num_policies=self._num_policies,
+            num_samples=num_samples,
+            grid=grid,
+            grid_density=grid_density,
+            test=test,
+            sampling_mode=sampling_mode,
+            grid_sample_count=grid_sample_count,
+            dirichlet_sample_count=dirichlet_sample_count)
+        print("Mixed-strategy samples:", len(self._sampled_mixed_policies))
 
         # Results container.
         self._samples_X = []
@@ -96,6 +179,7 @@ class Coarse_Utility_Sampler():
         """
         for idx, policy in enumerate(self._policies):
             for i, mixed_policy_weights in enumerate(self._sampled_mixed_policies):
+                mixed_policy_weights = _normalize_mixture_weights(mixed_policy_weights)
                 cur_policy = MergedPolicy(self._mfg_game,
                                           list(range(self._mfg_game.num_players())),
                                           self._policies,

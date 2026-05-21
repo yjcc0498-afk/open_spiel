@@ -14,6 +14,15 @@ from open_spiel.games.mfg.EGTA.se_gm.utils import qp_projection2
 from scipy.stats import wasserstein_distance
 
 
+def _empty_run_stats():
+    return {
+        "inner_regret": [],
+        "model_regret": [],
+        "model_mask": [],
+        "norms": [],
+    }
+
+
 class FictitiousPlayMSS(MetaStrategyMethod):
     def __init__(self,
                  mfg_game,
@@ -53,6 +62,7 @@ class FictitiousPlayMSS(MetaStrategyMethod):
         self._model = model
         self._norm = norm
         self._num_samples = num_samples
+        self._last_run_stats = _empty_run_stats()
         # 新增：当使用 Transformer 编码时，进入 inner loop 之前先为当前策略池
         # 预计算所有 pure policy 的时序特征，后续 predict 直接查缓存。
         if self._model is not None:
@@ -173,12 +183,15 @@ class FictitiousPlayMSS(MetaStrategyMethod):
         self.warm_start()
 
         regret_list = []
+        model_mask = []
         period = self._planning_iters + self._fine_tune_iters
         for i in range(self._num_iterations):
             if i % period < self._planning_iters:
                 regret = self.iteration(use_simulator=False)
+                model_mask.append(1)
             else:
                 regret = self.iteration(use_simulator=True)
+                model_mask.append(0)
             regret_list.append(regret)
 
             if i % period == self._planning_iters - 1:
@@ -192,6 +205,12 @@ class FictitiousPlayMSS(MetaStrategyMethod):
             self._current_iter += 1
             if regret < self._regret_threshold:
                 break
+        self._last_run_stats = {
+            "inner_regret": list(regret_list),
+            "model_regret": (np.asarray(regret_list) * np.asarray(model_mask)).tolist(),
+            "model_mask": list(model_mask),
+            "norms": [],
+        }
         print("Inner loop regret:", regret_list)
 
 
@@ -350,6 +369,9 @@ class FictitiousPlayMSS(MetaStrategyMethod):
         """
         return self._current_iter
 
+    def get_last_run_stats(self):
+        return self._last_run_stats
+
 
 
 
@@ -394,6 +416,7 @@ class ReplicatorDynamicsMSS(MetaStrategyMethod):
         self._planning_iters = planning_iters
         self._fine_tune_iters = fine_tune_iters
         self._w_distance = w_distance
+        self._last_run_stats = _empty_run_stats()
         # 新增：RD 路径和 FP 一样，初始化时先刷新当前策略池的时序特征缓存。
         if self._model is not None:
             self._model.refresh_policy_features(self._mfg_game, self._policies)
@@ -506,9 +529,8 @@ class ReplicatorDynamicsMSS(MetaStrategyMethod):
         norms = []
         num_policies = len(self._policies)
 
-        # for i in range(self._planning_iters * num_policies):
-        # Previously, we set model iter to be 30.
-        for i in range(20):
+        planning_budget = min(self._planning_iters, self._num_iterations)
+        for i in range(planning_budget):
             # Using fixed number of iterations as switch criterion.
 
             cur_weights = self.get_model_weights()[0]
@@ -526,9 +548,8 @@ class ReplicatorDynamicsMSS(MetaStrategyMethod):
             if regret < self._regret_threshold:
                 break
 
-        extra = 30 // num_policies
-
-        for i in range(self._fine_tune_iters + self._planning_iters - extra):
+        simulation_budget = max(self._num_iterations - len(regret_list), 0)
+        for i in range(simulation_budget):
             regret = self.iteration(use_simulator=True)
             iter_for_model.append(0)
             regret_list.append(regret)
@@ -545,6 +566,12 @@ class ReplicatorDynamicsMSS(MetaStrategyMethod):
         print("Iter_for_model:", iter_for_model, "Total:", np.sum(iter_for_model))
         print("Norms:", norms)
         print("Model regret:", np.array(regret_list) * np.array(iter_for_model))
+        self._last_run_stats = {
+            "inner_regret": list(regret_list),
+            "model_regret": (np.asarray(regret_list) * np.asarray(iter_for_model)).tolist(),
+            "model_mask": list(iter_for_model),
+            "norms": list(norms),
+        }
         print("Inner loop regret:", regret_list)
 
 
@@ -602,6 +629,12 @@ class ReplicatorDynamicsMSS(MetaStrategyMethod):
         loss = self._model.fit()
         print("Model training ends with loss:", loss)
 
+        self._last_run_stats = {
+            "inner_regret": list(regret_list),
+            "model_regret": (np.asarray(regret_list) * np.asarray(iter_for_model)).tolist(),
+            "model_mask": list(iter_for_model),
+            "norms": list(norms),
+        }
         print("Inner loop regret:", regret_list)
 
     def run(self, v2=False):
@@ -691,6 +724,9 @@ class ReplicatorDynamicsMSS(MetaStrategyMethod):
         :return: current number of FP iteration.
         """
         return self._current_iter
+
+    def get_last_run_stats(self):
+        return self._last_run_stats
 
     def get_weights_on_orig_policies(self):
         """

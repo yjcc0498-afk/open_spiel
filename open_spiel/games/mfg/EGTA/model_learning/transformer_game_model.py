@@ -84,7 +84,13 @@ class PaperMLPGameModel(nn.Module):
 
 
 class TransformerGameModel(_BaseTransformerEncoder):
-    """Legacy one-hot strategy + mixed-weight Transformer regressor."""
+    """Coarse-coded Transformer regressor for [pure strategy one-hot, mixed strategy].
+
+    This keeps the paper's input representation unchanged. The only change from
+    PaperMLPGameModel is the neural regressor: one token is built from I(s), one
+    token is built from sigma, and a Transformer encoder predicts utility from
+    those two coarse-coded tokens.
+    """
 
     def __init__(self, num_strategies, d_model=128, nhead=4, num_layers=2,
                  dim_feedforward=256, dropout=0.1):

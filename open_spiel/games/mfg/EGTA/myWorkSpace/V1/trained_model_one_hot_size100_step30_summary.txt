@@ -1,0 +1,8 @@
+data_dir=/root/autodl-tmp/open_spiel/open_spiel/games/mfg/EGTA/root_result/mfg_crowd_modelling_it_17_sampling_hybrid_sample_300_gendata_2026-04-28_16-46-37
+encoding=one_hot
+train_size=4320
+val_size=1080
+final_train_loss=72.943040
+final_val_loss=31.752128
+final_train_r2=0.899785
+final_val_r2=0.951789

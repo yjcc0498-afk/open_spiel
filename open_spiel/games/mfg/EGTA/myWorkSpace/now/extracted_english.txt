@@ -1,0 +1,749 @@
+
+
+===== PAGE 1 =====
+
+Game Model Learning for Mean Field Games
+Paper #86
+Abstract. We present an approach to learning models for mean
+field games (MFGs) from simulation data. To model an MFG, the
+central object is to capture the result of a strategy played by a rep-
+resentative player in the context of the distribution over the infinite
+population of other players (i.e., the mean field). We thus define the
+problem of learning a utility function that maps from a restricted set
+of strategies and possible mean fields to utility values. Starting from
+the time-dependent structure typically employed in defining MFGs,
+explicitly encoding the strategies and mean fields would make for an
+impractically complex regression setup. To handle this issue, we de-
+velop a coarse coding scheme that abstracts away the time-dependent
+complexity and dramatically simplifies the input representation. To
+endow the learned utility function with the power of generalization
+across the space of mean fields, one key step is to uniformly sam-
+ple strategies that induce mean fields in the restricted strategy space,
+which is typically high-dimensional. To handle the sampling in high-
+dimensional strategy spaces, we employ a combination of two sam-
+pling schemes: grid sampling and sampling from Dirichlet distribu-
+tions with varying concentration parameters. Through experiments
+on some standard MFGs, we show that our methods achieve effective
+generalization and the learned game models can successfully support
+game-theoretic analysis.1
+1 Introduction2
+Mean field games (MFGs) [12, 8] describe systems with a conceptu-3
+ally infinite number of interacting strategic players. Players within4
+a population are treated atomistically and identically, so that the5
+state of the system can be captured by a probability distribution over6
+player states (the “mean field”). Analysis in MFGs can be reduced7
+to the characterization of the optimal behavior of a single representa-8
+tive player in its interactions with the full population, as represented9
+by the mean field. The MFG framework can support game-theoretic10
+analysis that would be intractable for a standard corresponding model11
+of a game among a large but finite number of players.12
+Despite MFGs provide a simplified framework, game-theoretic13
+analysis is still hindered by the large strategy spaces in MFGs. To14
+handle the large strategy spaces, one popular methodology that has15
+been widely applied in finite games is to construct a game model that16
+approximates the true game and analyze the true game by reasoning17
+about the game model [24, 23, 27]. A game model involves only a18
+particular set of strategies and a utility function induced from sample19
+utilities over combinations of the set of strategies. Due to the restric-20
+tion on the strategy space, a game model is considered as an succinct21
+description of the true game and can be analyzed readily.22
+Although being effective in finite games, the methodology cannot23
+be directly applied to MFGs on account of lack of a well-defined24
+game model. To define a game model, a key step is to induce a utility25
+function over the restricted set of strategies. As a result of the non-26
+linearity of the utility function of MFGs in the mean field [18, 26]27
+and the continuity of the space of mean fields, representing a utility 28
+function explicitly over mean fields derived by any strategy mixture 29
+becomes completely infeasible. Without a proper representation of 30
+the utility function, a game model currently has not been well-defined 31
+for MFGs in prior work and thus the methodology for game analysis 32
+fails to apply. 33
+In this work, we fill in this gap and propose to define a game model 34
+for MFGs by learning a utility function over a restricted set of strate- 35
+gies and distributions derived by these strategies. We study the gen- 36
+eral setup of MFGs where strategies and distributions are both time- 37
+dependent (i.e., non-stationary), and hence encoding them explicitly 38
+as inputs to a learner entails impractically high dimensionality. To 39
+handle the time-dependency, we propose a coding scheme and learn 40
+a utility function that takes as inputs sufficiently-statistical represen- 41
+tations of strategies and distributions, and outputs a utility. With our 42
+method, time-dependent strategies and distributions are no longer ex- 43
+plicitly encoded as inputs as for the true utility function and hence 44
+our method circumvents the representation complexity induced by 45
+the time-dependency. We refer to this method ascoarse coding. 46
+To learn an effective utility function for MFGs, it is important to 47
+endow the learned utility function with the ability of generalization 48
+across the space of strategies that induce mean fields. To reach this 49
+goal, the training data set is required to include uniformly-sampled 50
+mixed strategies in the restricted strategy space. For a large MFG, an 51
+effective game model typically involves dozens of strategically sig- 52
+nificant strategies, which creates a high-dimensional strategy space. 53
+To obtain samples in such high-dimensional spaces, we propose a 54
+combination of two sampling schemes: grid sampling and sampling 55
+from the Dirichlet distribution with varying concentration parame- 56
+ters. By combining coarse coding with our data sampling methods, 57
+we demonstrate that our approach can successfully achieve effective 58
+generalization and accurate predictions on utilities. We also show 59
+that the learned utility function can support game-theoretic analysis, 60
+that is, both fictitious play (FP) [21] and replicator dynamics (RD) 61
+[26] empirically converge to NE with the learned utility function. 62
+The main contribution of this study is a learning approach for 63
+constructing game models for MFGs. We propose a coarse coding 64
+scheme that successfully handles the high-dimensional representa- 65
+tion of the time-dependent strategies and distributions. We propose 66
+a data sampling scheme to enable generalization of a learned model, 67
+which combines grid sampling and sampling from the Dirichlet dis- 68
+tribution with varying parameters. Through experiments on some 69
+standard MFGs, we demonstrate the learned model can effectively 70
+predict utilities and achieves efficacious generalization. Finally, we 71
+show that our learned model can successfully support game-theoretic 72
+analysis. 73
+
+
+===== PAGE 2 =====
+
+2 Related Work74
+2.1 Game Model Learning in Finite Games75
+In essence, game model learning is a form of regression that learns76
+the utility function over a restricted set of strategies. To the best of77
+our knowledge, our work is the first study of game model learning78
+in MFGs. We briefly survey prior work on game model learning for79
+finite games.80
+V orobeychik et al. [25] first introduced the concept of learning81
+normal-form game models as utility function regression from sim-82
+ulation data sampled over continuous strategy spaces. They demon-83
+strated the approach using single-parameter strategy representation.84
+Ficici et al. [6] clustered a large number of players into two roles85
+based on data consisting of strategy profiles and utilities. Then re-86
+gression of the utility function was applied for each role.87
+Wiedenbeck et al. [28] deployed Gaussian process regression88
+(GPR) to learn the utility function of large symmetric games. The89
+regressor takes as input a pure strategy profile and outputs a utility90
+vector. In symmetric games, since the utility function depends on91
+how many players choose each strategy (and not which players), the92
+input vector to the regressor can be represented by a non-negative93
+tally vector with one dimension per strategy. Once the utility func-94
+tion for pure strategy profiles is learned, the extension to mixed strat-95
+egy profiles can be achieved by taking the expectation. The authors96
+further investigated the use of neural networks for the regression.97
+Sokota et al. [22] extended game model learning to role-symmetric98
+games by regressing the deviation payoff function rather than the99
+payoff function. Deviation payoffs can be directly used by algorithms100
+such as replicator dynamics, saving the effort to derive deviation pay-101
+offs first from the payoff function. This approach has also been de-102
+ployed by Li and Wellman [15] to learn NE in Bayesian games.103
+There has also been some work on learning game models on some104
+succinct descriptions of games. For example, Duong et al. [3] and105
+Fearnley et al. [5] learned graphical game models [9] from utility106
+data. Li and Wellman [14] combined structure learning and payoff107
+regression to induce tractable game models with many players.108
+For MFGs, there is a considerable literature on learning equilibra109
+[2, 7, 21, 17, 18, 13, 26]. Despite we show that the learned utility110
+function can facilitate equilibrium search in our experiments, our ap-111
+proach differs from these works in nature since our object is to learn112
+the utility function of MFGs rather than presenting an equilibrium113
+learning algorithm. Therefore, they are not fair baselines for our ap-114
+proach.115
+2.2 Learning with Game Models in MFGs116
+Muller et al. [19] adapted Policy Space Response Oracles (PSRO)117
+framework [10] to mean-field games (MFGs), which essentially con-118
+ducts game-theoretic analysis through analyzing game models in119
+which the set of strategies are constructed by reinforcement learning.120
+However, the game models used in their work are not well-defined121
+because the utility function for MFGs is not generally linear in the122
+mean field and thus the empirical MFG model cannot be represented123
+explicitly. Our approach provides a practical way to construct game124
+models through learning. Using a learned game model has potential125
+to dramatically decrease the cost of analyzing an empirical game in126
+two ways. First, a learned game model can avoid querying the same127
+or similar profile multiple times. Second, a learned game model can128
+accelerate learning dynamics on empirical games by circumventing129
+the induction of distributions.130
+3 Preliminaries 131
+We study MFGs with a temporal structure, where a representative 132
+player interacts with its population over state space X, action space 133
+A, and time horizon T . A normal-form representation of a single- 134
+population mean field game (MFG) is given by G = ( S, u). The 135
+population corresponds to a conceptually infinite and interchange- 136
+able set of players. S denotes the set of strategies and u denotes the 137
+utility function. State space X, action space A and time horizon T 138
+are encoded in the definitions of a strategy s ∈ S and the utility 139
+function u as described below. 140
+A representative player’s strategy maps states to actions in ac- 141
+tion space A. Formally, a strategy at time t, st, maps from state 142
+space X to the space of action distributions ∆(A), where ∆ rep- 143
+resents the probability simplex over a set. The overall strategy s = 144
+(st)t∈[0,T −1] ∈ S is a sequence of strategies from time 0 through 145
+horizon T . 146
+The behavior of the population is summarized by a mean field, de- 147
+fined as distributions over an underlying state space X of the game 148
+environment. Denote distributions of the population over time hori- 149
+zon T as µ = (µt)t∈[0,T] ∈ ∆(X)T+1. 150
+A utility function u : S × ∆(X)T+1 → R defines the payoff to 151
+a representative player of the population playing its strategy against 152
+the distribution of the population. 153
+A mixed strategy σ is a probability distribution over strategies in
+S, with σ(s) denoting the probability the representative player plays
+strategy s. The expected utility of playing a mixed strategy σ given
+distribution µ is
+u(σ, µ) =
+X
+s∈S
+σ(s)u(s, µ). (1)
+The representative player’s best response to population distribu-
+tions µ is any strategy yielding maximum payoff for the player, hold-
+ing the distributions µ constant:
+br(µ) = argmax
+σ∈∆(S)
+u(σ, µ).
+A Nash equilibrium (NE) for an MFG is a strategyσ∗ such that σ∗ ∈ 154
+br(µ∗) and µ∗ is induced by σ∗. 155
+Distributions µ are said to be induced byσ, denoted as µσ, follow-
+ing the Forward Equation, that is, given an initial distributionµ0, for
+t ∈ [0, T − 1] and all x′ ∈ X,
+µσ
+t+1(x′) =
+X
+x,a∈X,A
+µσ
+t (x)σt(a | x)p(x′ | x, a), (2)
+where p : X × A → ∆X is the transition function. Let Φ : ∆(S) × 156
+∆(X) → ∆(X)T be a function that takes as input a mixed strategy 157
+σ and an initial distribution µ0 and outputs the induced µσ. 158
+The representative player’sregret of playing σ given distributions
+µ in game G is given by
+ρG(σ, µ) = max
+s∈S
+u(s, µ) − u(σ, µ).
+Regret captures the maximum the representative player can gain in 159
+expectation by unilaterally deviating from its mixed strategy σ to an 160
+alternative strategy in S, given distributions µ. A NE σ∗ has zero re- 161
+gret for the representative player against the population distributions 162
+µ∗. 163
+A game model ˆGS↓Λ = (Λ , ˜u) is an approximation of the true 164
+game G, where ˜u is a projection of u onto the restricted strategy 165
+space Λ. 166
+2
+
+
+===== PAGE 3 =====
+
+4 Methods167
+4.1 Time-dependent Strategies and Distributions168
+The primary goal of game model learning is to learn the utility func-169
+tion ˜u(σ, µ) over a restricted set of strategies. Since˜u(σ, µ) is an ex-170
+pectation of ˜u(s, µ) over s ∈ Λ (this follows Equation 1), it is suffi-171
+cient to learn the utility function˜u(s, µ) on pure strategies. In MFGs,172
+a strategy s and distributions µ are generally both time-dependent173
+(i.e., s = ( st)t∈[0,T −1] and µ = ( µt)t∈[0,T]). Explicitly encoding174
+them as inputs to a learner would result in a high-dimensional fea-175
+ture vector and entail an impractically complex regression setup. To176
+handle this issue, we propose a coarse coding scheme.177
+4.2 Coarse Coding178
+In finite games, a utility function can be treated as a black box (il-179
+lustrated in Figure 1) and abstracts away the details of strategies as180
+well as the mechanism of the utility computation. A black-box util-181
+ity function takes a simple representation of a strategy profile I(s)182
+(i.e., a vector of strategy indices one per player) as input and outputs183
+utility samples.184
+Figure 1. A black-box utility function.
+We are inspired by this abstraction and handle the time-185
+dependency by learning a black-box version of the true utility func-186
+tion ˜u. Mathematically, consider a restricted strategy set Λ ⊆ S. Let187
+I : Λ → Z+ be an indexing function that assigns a unique index to188
+each strategy s ∈ Λ. Let σ be the mixed strategy that induces the189
+distributions µσ. Since the distribution induction function Φ is de-190
+terministic, the distributions µσ are uniquely determined by a fixed191
+initial distribution µ0 ∈ ∆(X) and a strategy σ.1 Rather than learn-192
+ing ˜u(s, µσ) with time-dependent inputs, we learn a black-box util-193
+ity function ˆu : I(Λ) × ∆(Λ) → R with equivalent representations194
+I(s) and σ of s and µσ, respectively. We refer to this representation195
+as coarse coding.196
+Our object is to predict the true utility ˜u(s, µσ) by ˆu(I(s), σ) and197
+thus minimizing the mean square loss E[(˜u(s, µσ) − ˆu(I(s), σ))2].198
+Our regression is based on neural networks and the structure of the199
+neural networks is shown in Figure 2. In practice, I(s) can be any200
+representation of categorical inputs (e.g., one-hot encoding) and σ is201
+a vector of strategy probabilities.202
+There are two main benefits of coarse coding. First, the coarse203
+coding scheme only requires a simple network structure with a one-204
+hot encoded strategy and a vector representation of a mixed strategy.205
+So the implementation of coarse coding is straightforward.206
+Second, the coarse coding scheme can dramatically simplify the207
+execution of equilibrium search algorithms for MFGs. Consider FP208
+as an example. FP for MFGs can be summarized as iterating three209
+1 We assume µ0 is fixed given an MFG, so it is sufficient for σ to determine
+µσ.
+Figure 2. Neural network structure for coarse coding.
+steps: (1) computing a best response strategy against given distribu- 210
+tions µ, (2) updating the averaged strategy after adding the new best 211
+response strategy, and (3) computing the distributions µ induced by 212
+the averaged strategy through the forward equation (Eq. 2). Aver- 213
+aging strategies into one merged strategy and distribution induction 214
+(i.e., the second step and the third step) are usually considered to 215
+be computationally expensive [13]. With coarse coding, the compu- 216
+tation in step (2) and step (3) can be largely reduced. In step (2), 217
+the averaged strategy is now represented by a probability vector on 218
+Λ rather than a strategy entity and the averaged strategy update be- 219
+comes a update of the probability vector. Hence, there is no need to 220
+merge strategies over states, actions, and time horizon. Meanwhile, 221
+in step (3), the distribution induction is no longer needed since the 222
+probability vector (i.e., a mixed strategy σ) can sufficiently repre- 223
+sent the distributions µσ (because the initial distribution µ0 is fixed 224
+and the forward equation is deterministic). In essence, learning with 225
+coarse coding can be viewed as an end-to-end learning approach, in 226
+which distribution induction is implicitly learned from data. Based 227
+on these benefits, FP can be dramatically accelerated given a coarse- 228
+coded utility model. 229
+4.3 Data Sampling 230
+For regression in our case, a data point constitutes an index of a 231
+pure strategy I(s), a mixed strategy σ, and a true utility ˜u(s, µσ). 232
+To collect these data points, the basic requirement is that the sam- 233
+pled mixed strategies σ’s should uniformly distribute in the restricted 234
+strategy space so as to endow the learner with the ability of general- 235
+ization across the space of induced distributions. For a large MFG, 236
+a game model typically contains dozens of strategies, which makes 237
+the sample space high-dimensional. It is well-known that uniformly 238
+sampling in a high-dimension space suffers the curse of dimension 239
+and a finite number of samples will mainly concentrate at the center 240
+of the space while less samples appear at its corners.2 To handle this 241
+issue, we combine two sampling schemes. 242
+Our first sampling scheme is grid sampling. In grid sampling, a 243
+grid of points on the surface of a strategy simplex are sampled. The 244
+grid sampling can be achieved by combinatorial algorithms [20]. 245
+Specifically, denote the parameter K as the sum of each unnormal- 246
+ized sample and|S| as the number of strategies in a restricted set. The 247
+total number of the samples is (K+|S|−1)!
+K!(|S|−1)! (i.e., K + |S| − 1 choose 248
+|S| −1). For example, forK = 4 and |S| = 2, samples have the vec- 249
+tor form [(0, 4), (1, 3), (2, 2), (3, 1), (4, 0)]. After being normalized 250
+by K for each sample, the samples generate a grid on the|S|-simplex 251
+(i.e., [(0, 1), ( 1
+4 , 3
+4), ( 2
+4 , 2
+4), ( 3
+4 , 1
+4), (1, 0)]). In our experiments, we 252
+select K = 4 and |S| varies based on specific MFGs. 253
+2 Uniformly sampling can be implemented using Dirichlet distributions.
+3
+
+
+===== PAGE 4 =====
+
+Our second sampling scheme relies on symmetric Dirichlet distri-
+butions with different concentration parameters α. Mathematically,
+the density function of a symmetric Dirichlet distribution is repre-
+sented in terms of Gamma function, as follows
+f(x1, . . . , x|S|; α) = Γ(α|S|)
+Γ(α)|S|
+|S|Y
+i=1
+xα−1
+i .
+A concentration parameter α controls the density of samples. With254
+α > 1, samples are dense near the centroid while samples are255
+sparsely distributed with α < 1 and close to corners of the simplex.256
+We set a range of values for α and sample the corresponding Dirich-257
+let distribution, aiming at generating a sufficient number of samples258
+covering the strategy simplex.259
+Combining samples from these two sampling schemes, we obtain260
+a set of mixed strategy samples in the strategy space. Then we induce261
+µσ for each sampledσ by the forward equation and evaluate˜u(s, µσ)262
+for each pure strategys ∈ Λ and µσ. Therefore, we obtain data points263
+that contain indices of the pure strategy I(s), mixed strategies σ’s,264
+and the corresponding utilities ˜u(s, µσ).265
+In the discussion above, we assume a restricted set of strategies266
+and our object is to learn a utility function over this set of strategies.267
+To obtain such a set of strategies, we apply iterative EGTA to MFGs268
+(i.e., a variant of Double Oracle [16] to MFGs) [18, 26], which is269
+a common approach for assembling a strategy portfolio for a game270
+model. The generated strategies are both diverse and exhibit interest-271
+ing strategic interactions (e.g., containing a NE of the true MFG).272
+4.4 Approximating Nash Equilibrium273
+Whether a learned utility function ˆu is sufficiently accurate to sup-274
+port NE computation is crucial for analyzing MFGs. To conduct this275
+evaluation, we consider two learning dynamics FP and RD, and im-276
+plement them using our learned utility function. For each learning277
+dynamic, we measure the regret of intermediate strategies generated278
+by the dynamic with the true utility function and the learned one,279
+respectively. If the regrets given by the true utility function and the280
+learned one are close to each other and both converge to 0 (i.e., ap-281
+proach a NE), we can claim that the learned utility function provides282
+good prediction and can support NE computation.283
+In Algorithm 1 and Algorithm 2, we show the implementations of284
+FP and RD with a learned utility function. Compared to implement-285
+ing FP and RD with the true utility function (Algorithm 2 and 3 by286
+Wang and Wellman [26]), the implementation with a learned utility287
+function becomes much simpler due to coarse coding (discussed in288
+Section 4.2).289
+Algorithm 1 Fictitious Play with a Learned Utility Function
+Input: A learned utility function ˆu. Define the initial strategy ¯σ as
+the average of strategies in the restricted set Λ = (s1, . . . , sτ).
+1: for Iteration j ∈ {1, . . . , J} do
+2: Evaluate ˆu(I(s), ¯σ), ∀s ∈ Λ
+3: Select a best response strategy s = argmaxs′∈Λ ˆu(I(s′), ¯σ)
+4: Update ¯σ: ¯σ(s) = 1
+j ns, ∀s ∈ Λ, where ns is the count of
+strategy s being a best response
+5: end for
+6: Return ¯σ
+Algorithm 2 Replicator Dynamics with a Learned Utility Function
+Input: A learned utility function ˆu. Define the initial strategy ¯σ as
+the average of strategies in the restricted set Λ = ( s1, . . . , sτ).
+A learning rate dt.
+1: for Iteration j ∈ {1, . . . , J} do
+2: Evaluate ˆu(I(s), ¯σ), ∀s ∈ Λ and compute the average fitness
+F = P
+s∈Λ ¯σ(s)ˆu(I(s), ¯σ)
+3: for s ∈ Λ do
+4: Update ¯σ(s)′ = ¯σ(s) + dt ∗ ¯σ(s)[ˆu(I(s), ¯σ) − F ]
+5: end for
+6: ¯σ = ¯σ′
+7: end for
+8: Return ¯σ
+5 Experimental Results 290
+5.1 Experimental Environments 291
+5.1.1 Beach Bar Problems 292
+We consider a beach bar problem [1, 4] and adopt the model by Per-
+rin et al. [21]. A beach bar problem for an MFG is a Markov De-
+cision Process with state space X. The state space can either be
+defined in 1-dimensional or 2-dimensional, yielding two types of
+beach bar problems with different complexity. In the 1-dimensional
+beach bar problem, the states are defined on a one-dimensional torus
+(X = 0, . . . ,|X| − 1), as illustrated in Figure 3. Actions of players
+include keeping still (at = 0) or moving left (at = −1) or mov-
+ing right (at = 1) at time step t on the torus aiming at getting as
+close as possible to the bar, while avoiding the crowded areas. In the
+2-dimensional beach bar problem, the states are defined on a two-
+dimensional torus and players are endowed with extra actions (e.g.,
+moving up and moving down). The increased number of actions re-
+sults in more strategies, making the 2-dimensional beach bar problem
+more strategically complex than the 1-dimensional beach bar prob-
+lem. In both problems, the transition function of the representative
+player of an MFG is given by:
+xt+1 = xt + at + ϵt,
+where at is an action of the representative player at timet and ϵt rep-
+resents the randomness of the environment. The immediate reward
+function is given by:
+r(xt, at, µt) = ˜r(xt) − |at|
+|X| − log(µt(xt)),
+where ˜r(xt) measures the closeness to the bar from statext, − |at|
+|X| is 293
+the running cost, which will be negative if any action has been taken, 294
+and − log(µt(xt)) represents the aversion of players to the crowded 295
+areas. 296
+Figure 3. An illustration of a beach bar.
+4
+
+
+===== PAGE 5 =====
+
+Figure 4. Regret curves with FP.
+Figure 5. Regret curves with RD.
+5.1.2 Linear Quadratic MFGs297
+Linear quadratic models were among the earliest to receive full
+mathematical treatment by the research community studying MFGs
+and we adopt the model by Perrin et al. [21]. Specifically, a lin-
+ear quadratic MFG is defined on a discretized state space X =
+{−L, . . . , L}. With an action space {−M, . . . , M}, a representa-
+tive player can move up to M states to the left or to the right or stay
+still. The transition function is given by
+xt+1 = xt + (K(mt − xt) + at)δt + zϵtδt
+and a reward function
+r(xt, at, µt) = [−1
+2 |at|2 + qat(mt − xt) − κ
+2 (mt − xt)2]δt
+with terminal reward
+r(xT , aT , µT ) = − C
+2 (mT − xT )2,
+where K, q, κ, C are given non-negative constant and ϵt represents298
+the randomness of the environment regularized by a constant z.299
+δt measures the time lapse between two time steps and mt =300
+P
+x∈X xµt(x) is the expectation of states. Players with this reward301
+function are encouraged to follow the average state of the population.302
+5.2 Training a Utility Function303
+Our training data set includes a combination of grid samples with a304
+sampling precision K = 4 and Dirichlet samples with α ∈ (0, 1]305
+and a step of 0.05. To construct a training data point, for each α, we306
+sample 150 mixed strategies σ’s from the corresponding Dirichlet307
+distribution and compute the ˜u(s, µσ) for each s ∈ Λ. The testing 308
+data are sampled from Dirichlet distributions with a larger range of 309
+α ∈ (0.01, 2.01] with a step size of 0.1. For eachα, we again sample 310
+150 mixed strategies to construct test data points. Details of training 311
+are shown in Appendix A. 312
+Table 1 reports the R2 score of our learned utility function on the
+testing data set in the aforementioned three MFGs. R2 score mea-
+sures the total variation explained by the model. Mathematically,
+R2 = 1 −
+P
+k(ˆyk − yk)2
+P
+k(yk − ¯y)2 ,
+where k is the index of samples,ˆy is the estimate given by the model, 313
+and ¯y is the mean of targets y. R2 score is between 0 and 1. If R2 314
+score is close to 1, the variation of the data is well-explained by the 315
+model. From Table 1, we observe a highR2 score of our model in all 316
+of the three MFGs. 317
+MFGs R2 Score
+Linear Quadratic 0.99998 ± 0.00001
+1-D Crowd Modeling 0.9724 ± 0.0024
+2-D Crowd Modeling 0.9465 ± 0.0034
+Table 1. Test results.
+5
+
+
+===== PAGE 6 =====
+
+Figure 6. Distribution estimation in 1-D crowd modeling: (top two rows) true utility function; (bottom tow rows) learned utility function.
+5.3 Approximating NE with a Learned Utility318
+Function319
+5.3.1 FP with a Learned Utility Function320
+In Figure 4, we plot the regret curves of FP with the true utility321
+function and the learned utility function respectively in three MFGs.322
+Since these MFGs support exact strategy evaluation (e.g., through323
+dynamic programming), the regret curves can be exactly computed324
+and hence no error bar is reported in the plots. In all cases, we ob-325
+serve that the regret curve generated with our learned utility function326
+can quickly coincide with the one using the true utility function, and327
+both successfully converge to 0 (i.e., reaching a NE). This means our328
+learned utility function has a good prediction accuracy on the equilib-329
+rium search path of FP and is able to support game-theoretic analysis330
+of MFGs.331
+5.3.2 RD with a Learned Utility Function332
+In Figure 5, we plot the regret curves of RD in three MFGs. In333
+the linear-quadratic game, we again observe that two regret curves334
+quickly coincide and RD successfully converge to 0. However, in 1-335
+D and 2-D crowd modeling games, we observe that the regret curves336
+with our learned utility function first quickly decrease as usual and337
+then slightly diverge later.3 This divergence is due to the prediction338
+3 Slightly divergence means that the error caused by the divergence is still
+much smaller than the scale of the utility, which may not affect further
+game-theoretical analysis dramatically.
+error of the learned utility function near the equilibrium. To improve 339
+the accuracy of the learned utility function around the equilibrium, 340
+we re-sample utilities ˜u(s, µσ) in the neighborhood of the σ at the 341
+divergence point and fine-tune the learned utility function. Then we 342
+continue RD with the fine-tuned learned utility function. In the plots, 343
+we re-sample at iteration 19 (indicated by the red vertical line) and 344
+observe that the divergence quickly disappears and RD converges 345
+to NE. This again shows that our learned model can support game- 346
+theoretic analysis of MFGs. 347
+5.4 Mean Field Estimation 348
+To verify that the learned game model can estimate the mean field 349
+(i.e., distributions) accurately, we plot the time-dependent distribu- 350
+tions induced by the equilibrium strategies computed with the true 351
+utility function and the learned one, respectively. Figure 6 and Fig- 352
+ure 7 show the equilibrium distributions selected at time steps with 353
+a step size 3 in 1-D and 2-D crowd modeling games with the utility 354
+function and the learned utility function. For visualization, states in 355
+the 1-D game are reshaped into 2 dimensions. By comparing plots 356
+on the top and at the bottom in Figure 6 and Figure 7 respectively, 357
+we observe that the distributions generated with the learned utility 358
+function are almost indistinguishable by inspection from those gen- 359
+erated with the true utility function. This accuracy can be quantified 360
+by Wasserstein distance, which as we report in Table 2 and Table 3 361
+are all quite tiny (< 0.0006) though with a tendency to increase over 362
+time. 363
+6
+
+
+===== PAGE 7 =====
+
+Figure 7. Distribution estimation in 2-D crowd modeling: (top two rows) true utility function; (bottom tow rows) learned utility function.
+t 1 2 3 4 5 6 7 8 9 10
+Values 0.0 4.0 7.0 9.0 1.1 1.6 1.8 1.9 2.2 2.0
+t 11 12 13 14 15 16 17 18 19 20
+Values 1.8 1.8 1.7 2.2 2.3 2.1 2.0 2.0 1.9 2.2
+t 21 22 23 24 25 26 27 28 29 30
+Values 2.3 2.6 3.2 3.1 3.5 3.8 4.0 4.1 4.1 4.1
+Table 2. Wasserstein distance (×10−4) in the 1-D crowd modeling game.
+t 1 2 3 4 5 6 7 8 9 10
+Values 0.0 2.4 3.6 3.5 3.3 3.1 3.7 3.6 3.6 3.7
+t 11 12 13 14 15 16 17 18 19 20
+Values 3.9 3.9 3.8 3.0 3.5 3.9 4.1 3.6 3.9 5.3
+t 21 22 23 24 25 26 27 28 29 30
+Values 4.9 5.1 4.9 4.1 3.9 4.0 4.0 4.3 4.7 4.6
+Table 3. Wasserstein distance (×10−4) in the 2-D crowd modeling game.
+6 Conclusion364
+In this study, we develop a game model learning approach for MFGs.365
+We introduce a coarse coding scheme to handle the high-dimensional366
+inputs in the utility function of MFGs and a data sampling scheme367
+for sampling in high-dimensional strategy spaces. We show that the368
+learning curves generated with our learned utility function almost369
+coincide with those given by the true utility function, which demon-370
+strates our learned utility function is accurate and can support game- 371
+theoretic analysis in MFGs. By combining the population, the re- 372
+stricted set of strategies, and a learned utility function, a game model 373
+for MFGs is well-defined. 374
+In our game model learning approach, each strategy is represented 375
+by an index. Although an index coding is beneficial to handling time- 376
+dependency, it does not provide any information about the similar- 377
+ity among strategies. Future research will include replacing the in- 378
+dex representation with the embedding (i.e., a summary) of param- 379
+eterized strategies, enabling the generalization of the learned game 380
+model to new strategies. 381
+References 382
+[1] W. B. Arthur. Inductive reasoning and bounded rationality. American 383
+Economic Review, 84(2):406–411, 1994. 384
+[2] P. Cardaliaguet and S. Hadikhanloo. Learning in mean field games: the 385
+fictitious play. ESAIM: Control, Optimisation and Calculus of Varia- 386
+tions, 23(2):569–591, 2017. 387
+[3] Q. Duong, Y . V orobeychik, S. Singh, and M. P. Wellman. Learning 388
+graphical game models. In Twenty-First International Joint Conference 389
+on Artificial Intelligence, pages 116–121, Pasadena, 2009. 390
+[4] J. Farago, A. Greenwald, and K. Hall. Fair and efficient solutions to 391
+the santa fe bar problem. In Grace Hopper Celebration of Women in 392
+Computing. Citeseer, 2002. 393
+[5] J. Fearnley, M. Gairing, P. W. Goldberg, and R. Savani. Learning equi- 394
+libria of games via payoff queries.J. Mach. Learn. Res., 16:1305–1344, 395
+2015. 396
+[6] S. G. Ficici, D. C. Parkes, and A. Pfeffer. Learning and solving 397
+many-player games through a cluster-based representation. In In 398
+Twenty-Fourth Conference on Uncertainty in Artificial Intelligence , 399
+page 187–195, 2008. 400
+7
+
+
+===== PAGE 8 =====
+
+[7] X. Guo, A. Hu, R. Xu, and J. Zhang. Learning mean-field games.401
+33st Annual Conference on Neural Information Processing Systems, 32,402
+2019.403
+[8] M. Huang, R. P. Malhamé, P. E. Caines, et al. Large population stochas-404
+tic dynamic games: Closed-loop McKean-Vlasov systems and the Nash405
+certainty equivalence principle. Communications in Information & Sys-406
+tems, 6(3):221–252, 2006.407
+[9] M. Kearns. Graphical games. Algorithmic Game Theory , 3:159–180,408
+2007.409
+[10] M. Lanctot, V . Zambaldi, A. Gruslys, A. Lazaridou, K. Tuyls, J. Péro-410
+lat, D. Silver, and T. Graepel. A Unified Game-Theoretic Approach to411
+Multiagent Reinforcement Learning. NIPS, 2017.412
+[11] M. Lanctot, E. Lockhart, J.-B. Lespiau, V . Zambaldi, S. Upadhyay,413
+J. Pérolat, S. Srinivasan, F. Timbers, K. Tuyls, S. Omidshafiei, et al.414
+OpenSpiel: A framework for reinforcement learning in games. arXiv415
+preprint arXiv:1908.09453, 2019.416
+[12] J.-M. Lasry and P.-L. Lions. Mean field games. Japanese Journal of417
+Mathematics, 2(1):229–260, 2007.418
+[13] M. Laurière, S. Perrin, S. Girgin, P. Muller, A. Jain, T. Cabannes,419
+G. Piliouras, J. Pérolat, R. Élie, O. Pietquin, et al. Scalable deep re-420
+inforcement learning algorithms for mean field games. arXiv preprint421
+arXiv:2203.11973, 2022.422
+[14] Z. Li and M. Wellman. Structure learning for approximate solution of423
+many-player games. In 34rd AAAI Conference on Artificial Intelligence,424
+volume 34, pages 2119–2127, 2020.425
+[15] Z. Li and M. P. Wellman. Evolution strategies for approximate solution426
+of bayesian games. In 35rd AAAI Conference on Artificial Intelligence,427
+volume 35, pages 5531–5540, 2021.428
+[16] H. B. McMahan, G. J. Gordon, and A. Blum. Planning in the pres-429
+ence of cost functions controlled by an adversary. In 20th International430
+Conference on Machine Learning, pages 536–543, 2003.431
+[17] R. K. Mishra, D. Vasal, and S. Vishwanath. Model-free reinforcement432
+learning for non-stationary mean field games. In 2020 59th IEEE Con-433
+ference on Decision and Control (CDC), pages 1032–1037. IEEE, 2020.434
+[18] P. Muller, M. Rowland, R. Elie, G. Piliouras, J. Perolat, M. Lauriere,435
+R. Marinier, O. Pietquin, and K. Tuyls. Learning equilibria in mean-436
+field games: Introducing mean-field psro. In 21th International Confer-437
+ence on Autonomous Agents and Multi-Agent Systems, 2021.438
+[19] P. Muller, M. Rowland, R. Elie, G. Piliouras, J. Perolat, M. Lauriere,439
+R. Marinier, O. Pietquin, and K. Tuyls. Learning Equilibria in Mean-440
+Field Games: Introducing Mean-Field PSRO. In AAMAS, 2022.441
+[20] A. Nijenhuis. HS Wilf Combinatorial Algorithms . Academic Press,442
+New York, 1975.443
+[21] S. Perrin, J. Pérolat, M. Laurière, M. Geist, R. Elie, and O. Pietquin.444
+Fictitious play for mean field games: Continuous time analysis and ap-445
+plications. 34st Annual Conference on Neural Information Processing446
+Systems, 2020.447
+[22] S. Sokota, C. Ho, and B. Wiedenbeck. Learning deviation payoffs in448
+simulation-based games. In 33rd AAAI Conference on Artificial Intelli-449
+gence, volume 33, pages 2173–2180, 2019.450
+[23] K. Tuyls, J. Pérolat, M. Lanctot, E. Hughes, R. Everett, J. Z. Leibo,451
+C. Szepesvári, and T. Graepel. Bounds and dynamics for empiri-452
+cal game theoretic analysis. In 19th International Conference on Au-453
+tonomous Agents and Multi-Agent Systems, volume 34, page 7, 2020.454
+[24] O. Vinyals, T. Ewalds, S. Bartunov, P. Georgiev, A. S. Vezhnevets,455
+M. Yeo, A. Makhzani, H. Küttler, J. Agapiou, J. Schrittwieser, et al.456
+StarCraft II: A new challenge for reinforcement learning. Technical457
+Report 1708.04782v1, arXiv, 2017.458
+[25] Y . V orobeychik, M. P. Wellman, and S. Singh. Learning payoff func-459
+tions in infinite games. Machine Learning, 67:145–168, 2007.460
+[26] Y . Wang and M. P. Wellman. Empirical game-theoretic analysis in mean461
+field games. arXiv preprint arXiv:2112.00900, 2021.462
+[27] M. P. Wellman. Methods for empirical game-theoretic analysis (ex-463
+tended abstract). In Twenty-First National Conference on Artificial In-464
+telligence, pages 1552–1555, Boston, 2006.465
+[28] B. Wiedenbeck, F. Yang, and M. Wellman. A regression approach for466
+modeling games with many symmetric players. In 32rd AAAI Confer-467
+ence on Artificial Intelligence, volume 32, 2018.468
+8
+
+
+===== PAGE 9 =====
+
+A Experiments Details469
+A.1 Parameters470
+We use MFG environments from Openspiel [11]. The settings of471
+our MFGs are listed in Table 4. To construct a meaningful restricted472
+game from full MFGs with large strategy spaces, we apply iterative473
+EGTA for MFGs [26] and build a restricted game in which a NE474
+of the full MFG is included. In other words, the support of NE is475
+included in the set of strategies.476
+For grid sampling and sampling with Dirichlet distributions, each477
+of them contributes to approximately 3000 samples for each s ∈ Λ478
+in ˜u(s, µσ). The number of samples we select in this study is surplus.479
+In future research, it is of significantly interest to investigate the re-480
+lationship between number of samples and the effectiveness of the481
+model.482
+Games # of States Time Horizon # of Strategies # of samples
+Linear Quadratic 10 10 10 ≈ 3000
+1-D Crowd 100 30 18 ≈ 6000
+2-D Crowd 100 30 18 ≈ 6000
+Table 4. MFG hyperparameters
+The parameters of our neural networks are listed in Table 5. The483
+input size of the neural networks depends on the MFGs. For exam-484
+ple, the input size for the 1-D crowd modeling game is 36 (i.e., the485
+number of strategies for one-hot encoding 18 plus the support of the486
+mixed strategy that induces the distribution 18). The output size is 1487
+(i.e., the estimated utility).488
+Parameters Values
+hidden layers 2 fully connected layers with size 256
+activations relu per hidden layer
+learning rate 0.001
+batch size 32
+training Steps 1000
+validation set proportion 0.3
+Table 5. Neural network hyperparameters
+A.2 Computational Resources489
+We use one2 × 3.0 GHz Intel Xeon Gold 6154 CPU with 8gb mem-490
+ories.491
+A.3 Code Availability492
+Following the double-blind policy, we will publish our code after the493
+review.494
+B Equilibrium Mean Field Estimation495
+9
+
+
+===== PAGE 10 =====
+
+Figure 8. Distribution Estimation with true utility function in 1-D crowd modeling.
+10
+
+
+===== PAGE 11 =====
+
+Figure 9. Distribution Estimation with the learned utility function in 1-D crowd modeling.
+11
+
+
+===== PAGE 12 =====
+
+Figure 10. Distribution Estimation with true utility function in 2-D crowd modeling.
+12
+
+
+===== PAGE 13 =====
+
+Figure 11. Distribution Estimation with the learned utility function in 2-D crowd modeling.
+13

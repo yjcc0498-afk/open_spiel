@@ -1,0 +1,13 @@
+
+===========================
+
+Iteration : 0
+FP regret: [np.float64(0.0)]
+RD regret: [np.float64(0.0)]
+Probabilities : [array([1.])]
+NashConv : 0.8247960168673387
+
+===========================
+
+Iteration : 1
+FP regret: [np.float64(0.8247960168673387), np.float64(3.389450147675184), np.float64(0.3227990090358688), np.float64(0.0767413152873857), np.float64(0.0029730683955477843)]
